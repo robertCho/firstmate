@@ -3597,6 +3597,18 @@ if [ "$RELAUNCH" -eq 1 ]; then
   fi
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
+  WINDOWS_HERDR_LEASE=0
+  if [ "$BACKEND" = herdr ]; then
+    case "$(uname -s)" in MINGW*|MSYS*) WINDOWS_HERDR_LEASE=1 ;; esac
+  fi
+  if [ "$WINDOWS_HERDR_LEASE" -eq 1 ]; then
+    # Windows Herdr does not expose foreground_cwd for Treehouse's nested
+    # shell. Acquire the documented durable lease instead of guessing a path
+    # from terminal output; the common isolation and slot-ownership guards
+    # below remain authoritative.
+    WT=$(cd "$PROJ_ABS" && treehouse get --lease --lease-holder "$ID") || exit 1
+    WT=$(cygpath -u "${WT//$'\r'/}") || exit 1
+  else
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
@@ -3655,8 +3667,12 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
     echo "error: treehouse get did not enter an isolated worktree within 60s (last seen '${last_seen:-none}': $last_reason; spawning project '$PROJ_ABS'); inspect window $T" >&2
     exit 1
   fi
+  fi
 
   validate_spawn_worktree "treehouse get" "$T"
+  if [ "$WINDOWS_HERDR_LEASE" -eq 1 ]; then
+    fm_backend_herdr_enter_windows_worktree "$T" "$WT" || exit 1
+  fi
 
   # Claim the pool slot for this task. The interactive `treehouse get` sent to
   # the pane above records only a process lease (Treehouse's durable
@@ -4379,7 +4395,14 @@ esac
 LAUNCH=${LAUNCH//__WORKTREE__/$sq_worktree}
 case "$HARNESS" in
 claude | codex | opencode | pi | pi-signed | grok | kimi | gemini | muse | rovo | agy)
-  LAUNCH="env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI $LAUNCH"
+  if [ "${WINDOWS_HERDR_LEASE:-0}" = 1 ]; then
+    # This is a newly allocated private shell. MSYS env's exec severs the
+    # native parent chain Herdr uses to recognize an agent; a shell builtin
+    # clears the same inherited markers without that process boundary.
+    LAUNCH="unset CURSOR_AGENT CURSOR_INVOKED_AS GEMINI_CLI; $LAUNCH"
+  else
+    LAUNCH="env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI $LAUNCH"
+  fi
   ;;
 esac
 # Crewmate panes are created by a long-lived tmux/herdr daemon that does not

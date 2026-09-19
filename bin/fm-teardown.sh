@@ -2894,6 +2894,7 @@ teardown_herdr_require_prerequisites() {  # <task-id>
     fm_backend_herdr_workspace_presence_state \
     fm_backend_herdr_endpoint_confirmed_gone \
     fm_backend_herdr_explicit_close_pane_confirmed \
+    fm_backend_herdr_presentation_enabled \
     fm_backend_herdr_presentation_session_lock_path; do
     if ! declare -F "$prerequisite" >/dev/null 2>&1; then
       echo "error: herdr teardown prerequisites are unavailable for $task_id; nothing was changed - restore the adapter and rerun teardown" >&2
@@ -2928,6 +2929,16 @@ teardown_herdr_preflight_target() {  # <target> <task-id>
       return 1
       ;;
   esac
+  # The session lock exists to serialize the presentation projection's workspace
+  # reordering and focus restoration across concurrent pane closes. A home that
+  # opted out of the projection has no projection to serialize, so requiring the
+  # lock made teardown depend on a feature that is switched off - and an
+  # unobtainable lock then refused teardown outright with no manual recovery.
+  # fm-spawn.sh already gates its projection work on this same predicate; this
+  # is the matching gate on the teardown side.
+  if ! fm_backend_herdr_presentation_enabled "$CONFIG"; then
+    return 0
+  fi
   if ! lock_path=$(fm_backend_herdr_presentation_session_lock_path "$session"); then
     echo "error: herdr session presentation lock could not be resolved for $task_id; nothing was changed - rerun teardown once the session is reachable and unambiguous" >&2
     return 1
@@ -3493,6 +3504,14 @@ if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
   fi
 elif [ "$BACKEND" = herdr ]; then
   if teardown_herdr_session_lock_held "$TEARDOWN_HERDR_SESSION"; then
+    fm_backend_herdr_kill_serialized "$TEARDOWN_HERDR_SESSION" "$TEARDOWN_HERDR_PANE" 2>/dev/null || true
+  elif ! fm_backend_herdr_presentation_enabled "$CONFIG"; then
+    # The home opted out of the projection, so nothing here manages workspace
+    # ordering and there is no projection work to serialize against. The
+    # focus-preserving close still runs; it just no longer demands a lock whose
+    # only purpose is ordering a projection this home does not have. Without
+    # this arm an unobtainable lock skipped every close, and the confirm-gone
+    # check below then refused teardown forever with no manual recovery.
     fm_backend_herdr_kill_serialized "$TEARDOWN_HERDR_SESSION" "$TEARDOWN_HERDR_PANE" 2>/dev/null || true
   else
     echo "warning: herdr session presentation lock path is unavailable; skipping the pane close rather than closing unlocked" >&2

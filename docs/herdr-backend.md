@@ -33,6 +33,28 @@ The required CI lane uses the pinned installers in `bin/fm-install-herdr.sh` and
 Those script headers own release assets, checksums, download bounds, and post-install gates.
 Real harness credential tests remain opt-in rather than part of default CI.
 
+### Native Windows with Git Bash
+
+The Windows compatibility path requires Git Bash, native symlink permission, and `MSYS=winsymlinks:nativestrict`.
+Use one canonical MSYS spelling of `FM_HOME` across Bash entrypoints and keep the private home outside the source checkout.
+Use native Windows `jq` with binary output (`jq --binary`) to avoid CRLF in parsed identifiers, and do not mix another MSYS runtime's utilities into Git Bash's `PATH`.
+Select the installed native `codex.exe` ahead of npm's POSIX shim: the shim's `exec` can sever Windows process ancestry and hide the worker from Herdr's agent inventory.
+The fresh Windows task shell clears inherited foreign-harness markers with `unset` for the same reason, instead of adding an MSYS `env` process before the native harness.
+Claude hook commands keep their Bash parent alive on MSYS so native ownership checks can reach the primary process.
+On a slow Windows host, `FM_SESSION_START_TIMEOUT=240` gives the documented startup digest a larger bounded budget within the 300-second SessionStart hook deadline.
+
+On Windows, ordinary Herdr task spawns acquire a durable Treehouse lease with the task ID, validate the isolated worktree through the existing ownership guards, and enter it in a newly allocated PowerShell pane before starting Git Bash.
+This avoids relying on `foreground_cwd`, which native Herdr 0.9.0 does not report for the nested Treehouse shell.
+The setup refuses an unexpected pane shell instead of typing PowerShell into an existing agent.
+This path does not establish support for relaunches, secondmates, or other worker harnesses.
+
+Set `config/herdr-presentation-spaces` to `off` on Git Bash's default `noacl` filesystem mounts.
+Those mounts cannot express the presentation namespace's required POSIX mode `700`.
+An opted-out home's flat-pane teardown does not acquire a projection lock; opted-in presentation operations retain their existing ownership and mode checks.
+Native symlink locks remain mandatory in both modes.
+If Treehouse refuses to return a completed Windows worktree because its terminal's PowerShell process remains inside that directory, close that task's verified Herdr endpoint explicitly before retrying the guarded teardown.
+Keep its metadata and private report until teardown succeeds; closing the endpoint alone does not return the worktree lease.
+
 ## Client selection
 
 Each operation routed through the adapter's session-scoped CLI helper starts with the first `herdr` on `PATH` unless that session has already selected another client.

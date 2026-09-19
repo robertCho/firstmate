@@ -6,6 +6,28 @@ This record contains reusable version-scoped evidence for active runtime guarant
 The backend guides own current setup, safety boundaries, and limitations.
 Exact task chronology, branch names, temporary homes, local paths, process ids, thread ids, and delivery transcripts remain in private reports or PR evidence.
 
+## Native Windows Claude primary and Codex worker
+
+Verified on 2026-09-19 with Windows 11 25H2, Git Bash 5.2.37, Herdr 0.9.0 client/server with protocol 22, Claude Code 2.1.278, Codex CLI 0.155.1, and Treehouse 2.3.0.
+The setup and scope of the compatibility path are documented in [the Herdr backend guide](../herdr-backend.md#native-windows-with-git-bash).
+The primary's SessionStart acquired a lock naming its live native Claude process, and the completed-startup record named the same process.
+The default 120-second digest budget truncated on this host; a rerun with `FM_SESSION_START_TIMEOUT=240` completed.
+
+The real Claude primary dispatched a read-only scout using `bin/fm-spawn.sh` with `--scout --harness codex --effort low` and the Herdr backend.
+`herdr agent get` and `herdr agent list` identified its separate task pane as `codex`, observed working and then idle/done, and `herdr pane process-info --pane` identified the native executable in the leased worktree.
+The worker returned three source-backed bullets explaining the backend, and the primary received and reported them after requesting the initially omitted private report and completion status.
+The Stop-owned watcher delivered subsequent notifications without a manual watcher replacement.
+This verifies the requested ordinary dispatch and result-return path, not every Windows backend feature.
+
+Direct native Codex launch was the positive control for process visibility.
+The npm POSIX shim and the MSYS `env` wrapper each broke native ancestry in the failing dispatches; those panes existed and ran tasks but were absent from Herdr's agent inventory.
+Selecting native `codex.exe` and clearing foreign-harness markers with the shell builtin restored recognition while retaining the ordinary worker launch flags.
+Firstmate's separate semantic busy-state classifier still deliberately returns `unknown codex-unverified`; this upstream gate was not relaxed, and Herdr's native agent inventory remains independently observable.
+
+Validation used the canonical lint, documentation audience check, ancestry regressions, the added socket canonicalization cases, and the presentation-opt-out teardown regression.
+The POSIX live ancestry fixtures skip on MSYS, and unchanged upstream Windows baselines reproduce failures in the broader Herdr mock, worktree-settle, and Codex hook-layer suites.
+These results do not establish full portable CI parity, Windows relaunch support, presentation workspace support, or support for other worker harnesses.
+
 ## Harness detection precedence
 
 Firstmate's own harness comes from two kinds of evidence, and `bin/fm-harness.sh` owns how they combine: an environment marker names its harness, and the nearest harness process in the parent chain proves who owns the process tree.

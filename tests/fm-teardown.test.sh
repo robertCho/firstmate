@@ -2139,6 +2139,81 @@ SH
   pass "herdr flat teardown refuses before returning the isolated copy under lock contention and the retry completes cleanly"
 }
 
+# A home that opted out of the presentation projection has no projection to
+# serialize, so the session lock is not its concern. Before this gate, teardown
+# resolved and acquired that lock unconditionally, which made cleanup depend on
+# a feature that was switched off - and on a host where the lock namespace can
+# never satisfy its own validity check (Git Bash over a noacl NTFS mount cannot
+# produce mode 700), that turned into a permanent refusal with no manual
+# recovery. fm-spawn.sh already gates its projection work on the same predicate.
+# test_herdr_flat_teardown_refuses_orphaning_records_then_retry_completes above
+# is the negative control: with the projection left at its default (on), a
+# contended lock must still refuse.
+test_herdr_flat_teardown_opted_out_of_presentation_ignores_the_session_lock() {
+  local case_dir log closed lock ready release holder_pid thlog waited
+  case_dir=$(make_case herdr-presentation-opt-out)
+  write_meta "$case_dir" local-only ship
+  configure_flat_herdr_teardown_case "$case_dir"
+  log="$case_dir/herdr.log"; : > "$log"
+  closed="$case_dir/closed"
+  : > "$case_dir/state/task-x1.status"
+  : > "$case_dir/state/task-x1.turn-ended"
+  thlog="$case_dir/treehouse.log"; : > "$thlog"
+  cat > "$case_dir/fakebin/treehouse" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$thlog"
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/treehouse"
+  printf 'off\n' > "$case_dir/config/herdr-presentation-spaces"
+
+  # Make the lock genuinely unavailable, so that a teardown which still reached
+  # for it would fail. Two ways to be unavailable, and both must be tolerated:
+  #   - the namespace resolves and another holder owns it (POSIX hosts), or
+  #   - the namespace cannot be validated at all, so no path resolves. That is
+  #     the Windows case this gate exists for: a noacl NTFS mount cannot produce
+  #     mode 700, so fm_backend_herdr_presentation_lock_namespace_valid can never
+  #     pass and the lock is permanently unobtainable.
+  holder_pid=""
+  release="$case_dir/lock-release"
+  if lock=$(FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" PATH="$case_dir/fakebin:$PATH" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_presentation_session_lock_path default' "$ROOT"); then
+    ready="$case_dir/lock-ready"
+    ROOT="$ROOT" LOCK="$lock" READY="$ready" RELEASE="$release" bash -c '
+      . "$ROOT/bin/fm-wake-lib.sh"
+      fm_lock_try_acquire "$LOCK" || exit 1
+      : > "$READY"
+      while [ ! -e "$RELEASE" ]; do sleep 0.1; done
+      fm_lock_release "$LOCK"
+    ' &
+    holder_pid=$!
+    waited=0
+    while [ ! -e "$ready" ] && [ "$waited" -lt 50 ]; do sleep 0.1; waited=$((waited + 1)); done
+    [ -e "$ready" ] || { : > "$release"; fail "herdr-presentation-opt-out: the contending lock holder never started"; }
+  fi
+
+  # The lock is unavailable for the whole run: an opted-out teardown must never
+  # reach for it, so this completing at all is the proof.
+  FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" FM_BACKEND_HERDR_IDLE_SHELL_PROOF_POLLS=1 \
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || { : > "$release"; fail "herdr-presentation-opt-out: teardown refused while the projection was off: $(cat "$case_dir/stderr")"; }
+  : > "$release"
+  [ -z "$holder_pid" ] || wait "$holder_pid" 2>/dev/null || true
+
+  if grep -q "presentation lock" "$case_dir/stderr"; then
+    fail "herdr-presentation-opt-out: an opted-out teardown still reported a presentation lock problem: $(cat "$case_dir/stderr")"
+  fi
+  [ -e "$closed" ] || fail "herdr-presentation-opt-out: the pane was never closed"
+  [ -s "$thlog" ] || fail "herdr-presentation-opt-out: the isolated copy was never returned"
+  [ ! -e "$case_dir/state/task-x1.meta" ] \
+    || fail "herdr-presentation-opt-out: the completed teardown left the metadata behind"
+  [ ! -e "$case_dir/state/task-x1.status" ] \
+    || fail "herdr-presentation-opt-out: the completed teardown left the status record behind"
+  grep -q "teardown task-x1 complete" "$case_dir/stdout" \
+    || fail "herdr-presentation-opt-out: teardown did not report completion"
+  pass "herdr flat teardown ignores the session lock when the home opted out of the presentation projection"
+}
+
 test_herdr_flat_teardown_refuses_records_on_unparseable_presence() {
   local case_dir log closed rc
   case_dir=$(make_case herdr-garbage-presence)
@@ -3679,6 +3754,7 @@ test_secondmate_home_teardown_delivers_final_line_or_refuses
 test_teardown_missing_busy_sidecar_completes
 test_herdr_teardown_clears_escalation_marker
 test_herdr_flat_teardown_refuses_orphaning_records_then_retry_completes
+test_herdr_flat_teardown_opted_out_of_presentation_ignores_the_session_lock
 test_herdr_flat_teardown_refuses_records_on_unparseable_presence
 test_herdr_flat_teardown_preflight_refuses_before_changes
 test_forced_secondmate_herdr_child_preflight_refuses_before_changes

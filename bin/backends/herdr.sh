@@ -815,14 +815,23 @@ fm_backend_herdr_presentation_lock_namespace_valid() {
 # -> /private/tmp cannot yield two lock identities for the same socket.
 # fm_backend_herdr_canonical_socket_path: normalize one absolute Unix-socket
 # path so two spellings of the same socket compare equal. Refuses a relative
-# or empty path. An unresolvable directory is left as-is rather than treated as
-# a failure, so a socket whose directory was removed still compares by its own
-# literal path. Single owner for every socket-identity comparison in this
-# adapter (the presentation session lock and the launcher-identity same-session
-# proof both use it).
+# or empty path. On native Windows the herdr server injects and reports
+# drive-letter paths (C:\...\herdr.sock); those are converted to their POSIX
+# spelling first so the launcher's claimed socket and the session list's
+# socket_path land in the same form before comparison. An unresolvable
+# directory is left as-is rather than treated as a failure, so a socket whose
+# directory was removed still compares by its own literal path. Single owner
+# for every socket-identity comparison in this adapter (the presentation
+# session lock and the launcher-identity same-session proof both use it).
 fm_backend_herdr_canonical_socket_path() {  # <socket-path>
   local socket=$1 sock_dir sock_base
   [ -n "$socket" ] || return 1
+  case "$socket" in
+    [A-Za-z]:[\\/]*)
+      socket=$(cygpath -u "$socket" 2>/dev/null) || return 1
+      [ -n "$socket" ] || return 1
+      ;;
+  esac
   case "$socket" in
     /*) ;;
     *) return 1 ;;
@@ -2943,6 +2952,27 @@ fm_backend_herdr_target_ready() {  # <target>
 # `.result.pane.foreground_cwd` tracks the ACTUALLY RUNNING foreground
 # process's cwd instead, which is what changes when `treehouse get` enters its
 # worktree subshell - confirmed live against a real treehouse acquisition.
+fm_backend_herdr_enter_windows_worktree() {  # <target> <validated-worktree>
+  local target=$1 worktree=$2 info shell bash_path native_path native_worktree command
+  fm_backend_herdr_target_ready "$target" || return 1
+  info=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane process-info --pane "$FM_BACKEND_HERDR_PANE") || return 1
+  shell=$(printf '%s' "$info" | jq -r '.result.process_info.foreground_processes[0].name // empty')
+  case "$shell" in
+    powershell.exe|pwsh.exe) ;;
+    *) echo "error: Windows Herdr worktree entry requires a fresh PowerShell pane; got $shell" >&2; return 1 ;;
+  esac
+  bash_path=$(cygpath -m "$(command -v bash)") || return 1
+  native_path=$(cygpath -wp "$PATH") || return 1
+  native_worktree=$(cygpath -m "$worktree") || return 1
+  # PowerShell literal quoting. Only a newly allocated, validated task pane
+  # reaches this helper; never send shell setup to an existing agent.
+  bash_path=${bash_path//\'/\'\'}
+  native_path=${native_path//\'/\'\'}
+  native_worktree=${native_worktree//\'/\'\'}
+  command="\$ErrorActionPreference='Stop'; \$env:MSYS='winsymlinks:nativestrict'; \$env:PATH='$native_path'; \$env:SHELL='$bash_path'; Set-Location -LiteralPath '$native_worktree'; & '$bash_path' --noprofile --norc -i"
+  fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane run "$FM_BACKEND_HERDR_PANE" "$command" >/dev/null || return 1
+}
+
 fm_backend_herdr_current_path() {  # <target>
   fm_backend_herdr_target_ready "$1" || return 0
   fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane get "$FM_BACKEND_HERDR_PANE" 2>/dev/null \
